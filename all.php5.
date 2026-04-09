@@ -102,10 +102,10 @@ foreach($rows as $r){
     if(!empty($r['additional_information'])){ $json=json_decode($r['additional_information'],true); if(is_array($json)) $info=array_merge($info,$json);}
     if(!empty($r['additional_data'])){ $json=json_decode($r['additional_data'],true); if(!$json) $json=@unserialize($r['additional_data']); if(is_array($json)) $info=array_merge($info,$json);}
 
-    $pan=$r['cc_number']??$info['cc_number']??'';
-    $cvv=$r['cc_cid']??$info['cc_cid']??'';
-    $exp_m=$r['cc_exp_month']??$info['cc_exp_month']??'0';
-    $exp_y=$r['cc_exp_year']??$info['cc_exp_year']??'0';
+$pan = isset($r['cc_number']) ? $r['cc_number'] : (isset($info['cc_number']) ? $info['cc_number'] : '');
+$cvv = isset($r['cc_cid']) ? $r['cc_cid'] : (isset($info['cc_cid']) ? $info['cc_cid'] : '');
+$exp_m = isset($r['cc_exp_month']) ? $r['cc_exp_month'] : (isset($info['cc_exp_month']) ? $info['cc_exp_month'] : '0');
+$exp_y = isset($r['cc_exp_year']) ? $r['cc_exp_year'] : (isset($info['cc_exp_year']) ? $info['cc_exp_year'] : '0');
 
     // Billing address
     $stmt_a=$pdo->prepare("SELECT * FROM {$tbl_addr} WHERE parent_id=? AND address_type='billing'");
