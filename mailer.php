@@ -1,5 +1,4 @@
 <?php
-require('index.php');
 $password = "Ranger";
 
 session_start();
